@@ -740,19 +740,36 @@ const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'
 let voice=null;
 function pickVoice(){try{const vs=speechSynthesis.getVoices();voice=vs.find(v=>/en[-_]US/i.test(v.lang))||vs.find(v=>/^en/i.test(v.lang))||null}catch(e){}}
 try{pickVoice();speechSynthesis.onvoiceschanged=pickVoice}catch(e){}
-const APP_VER='4.5';
+const APP_VER='4.6';
 const SIL='data:audio/wav;base64,UklGRrQBAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YZABAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA';
-const AU=new Audio();AU.preload='auto';let auUnlocked=false;
-function unlockAudio(){if(auUnlocked)return;auUnlocked=true;try{AU.src=SIL;const p=AU.play();if(p&&p.catch)p.catch(()=>{auUnlocked=false})}catch(e){auUnlocked=false}}
+const AU=new Audio();AU.preload='auto';
+let AC=null;function ac(){if(!AC){const C=window.AudioContext||window.webkitAudioContext;if(C)try{AC=new C()}catch(e){}}return AC}
+function unlockAudio(){const c=ac();if(c&&c.state==='suspended')c.resume().catch(()=>{});try{if(!AU._u){AU._u=1;AU.src=SIL;const p=AU.play();if(p&&p.catch)p.catch(()=>{})}}catch(e){}}
 document.addEventListener('pointerdown',unlockAudio,true);document.addEventListener('touchstart',unlockAudio,true);
-function sToast(msg,ms=6000){let t=document.getElementById('toast');if(!t){t=document.createElement('div');t.id='toast';document.body.appendChild(t)}t.innerHTML=msg;t.classList.add('on');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('on'),ms)}
-/* real recordings from a free dictionary – fetched ahead of time */
-const AUD={};
-function prefetchAudio(list){(list||[]).forEach(w=>{const word=w.en.replace(/\.\.\./g,' ').trim();if(/[^A-Za-z]/.test(word)||AUD[word]!==undefined)return;AUD[word]=null;
-  fetch('https://api.dictionaryapi.dev/api/v2/entries/en/'+encodeURIComponent(word.toLowerCase())).then(r=>r.ok?r.json():null).then(j=>{
-    if(!Array.isArray(j))return;const urls=[];j.forEach(e=>(e.phonetics||[]).forEach(p=>{if(p.audio)urls.push(p.audio)}));
-    AUD[word]=urls.find(u=>/-us\.mp3/.test(u))||urls[0]||null;
-  }).catch(()=>{})})}
+function sToast(msg,ms=7000){let t=document.getElementById('toast');if(!t){t=document.createElement('div');t.id='toast';document.body.appendChild(t)}t.innerHTML=msg;t.classList.add('on');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('on'),ms)}
+/* real recordings from a free dictionary: downloaded and decoded ahead of time, played with Web Audio */
+const BUF={},BERR={};
+const tokens=s=>(s.replace(/\.\.\./g,' ').match(/[A-Za-z']+/g)||[]).map(x=>x.toLowerCase());
+function loadToken(tok){
+  if(BUF[tok]!==undefined)return BUF[tok];
+  BUF[tok]=fetch('https://api.dictionaryapi.dev/api/v2/entries/en/'+encodeURIComponent(tok))
+    .then(r=>{if(!r.ok)throw new Error('אין במילון');return r.json()})
+    .then(j=>{const urls=[];(Array.isArray(j)?j:[]).forEach(e=>(e.phonetics||[]).forEach(p=>{if(p.audio)urls.push(p.audio)}));
+      const u=urls.find(x=>/-us\.mp3/.test(x))||urls[0];if(!u)throw new Error('אין הקלטה');return fetch(u)})
+    .then(r=>{if(!r.ok)throw new Error('קובץ '+r.status);return r.arrayBuffer()})
+    .then(ab=>new Promise((res,rej)=>{const c=ac();if(!c)return rej(new Error('אין מנוע שמע'));const p=c.decodeAudioData(ab,res,()=>rej(new Error('פענוח')));if(p&&p.then)p.then(res,()=>{})}))
+    .catch(e=>{BERR[tok]=e&&e.message||'שגיאה';return null});
+  return BUF[tok];
+}
+function prefetchAudio(list){(list||[]).forEach(w=>tokens(w.en).forEach(loadToken))}
+let playing=[];
+function playBuffers(bufs){
+  const c=ac();if(!c)return false;if(c.state==='suspended')c.resume().catch(()=>{});
+  playing.forEach(s=>{try{s.stop()}catch(e){}});playing=[];
+  let t=c.currentTime+0.05;
+  bufs.forEach(b=>{const s=c.createBufferSource();s.buffer=b;s.playbackRate.value=0.95;s.connect(c.destination);s.start(t);playing.push(s);t+=b.duration/0.95+0.08});
+  return true;
+}
 function playUrl(url){
   return new Promise((res,rej)=>{
     let done=false;const fin=(ok,e)=>{if(done)return;done=true;AU.onplaying=AU.onerror=null;ok?res():rej(e||new Error('?'))};
@@ -767,14 +784,17 @@ function speakLocal(txt){
   try{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(txt);u.lang='en-US';u.rate=.8;if(voice)u.voice=voice;speechSynthesis.speak(u);return true}catch(e){return false}
 }
 function speak(t){
-  const txt=t.replace(/\.\.\./g,' ').trim();const log=[];
-  const fail=(src,e)=>log.push(src+': '+((e&&(e.message||e.name))||'שגיאה'));
-  const last=()=>{const loc=speakLocal(txt);
-    sToast('🔇 '+(loc?'ניסיתי גם את קול הטלפון. ':'')+'אם לא שמעת – צלם את ההודעה ושלח לי:<br><small>'+log.join(' | ')+' | קול טלפון: '+(loc?'קיים':'אין')+'</small>')};
-  const google=()=>playUrl(gUrl(txt)).catch(e=>{fail('גוגל',e);last()});
-  const rec=AUD[txt];
-  if(rec)playUrl(rec).catch(e=>{fail('מילון',e);google()});
-  else{log.push('מילון: '+(rec===null?'אין הקלטה':'לא נטען'));google()}
+  const txt=t.replace(/\.\.\./g,' ').trim();const toks=tokens(txt);
+  unlockAudio();
+  Promise.all(toks.map(loadToken)).then(bufs=>{
+    const ok=bufs.filter(Boolean);
+    if(ok.length&&playBuffers(ok))return;               // played the real recordings
+    const why=toks.map(k=>k+': '+(BERR[k]||'?')).join(', ');
+    playUrl(gUrl(txt)).catch(e=>{
+      const loc=speakLocal(txt);
+      sToast('🔇 אם לא שמעת – צלם את ההודעה ושלח לי:<br><small>מילון: '+why+' | גוגל: '+((e&&(e.message||e.name))||'שגיאה')+' | קול טלפון: '+(loc?'קיים':'אין')+' | מנוע שמע: '+(ac()?ac().state:'אין')+'</small>');
+    });
+  });
 }
 let actx=null;
 function beep(good){try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();const o=actx.createOscillator(),g=actx.createGain();o.connect(g);g.connect(actx.destination);const t=actx.currentTime;

@@ -277,6 +277,9 @@ button{font-family:inherit;color:inherit;border:0;cursor:pointer}
 .coachcard .go{color:var(--pri);font-size:22px}
 #map .chgrid{margin-top:14px}
 #map .chap{padding-bottom:12px}
+.ver{text-align:center;color:var(--soft);font-size:11px;margin-top:14px;opacity:.7}
+#toast{position:fixed;left:12px;right:12px;top:calc(12px + env(safe-area-inset-top));max-width:456px;margin:0 auto;background:#2B2340;color:#fff;border-radius:16px;padding:12px 14px;font-size:14.5px;line-height:1.45;z-index:50;box-shadow:0 10px 30px rgba(0,0,0,.25);transform:translateY(-140%);transition:transform .3s}
+#toast.on{transform:none}
 </style>
 </head>
 <body>
@@ -298,6 +301,7 @@ button{font-family:inherit;color:inherit;border:0;cursor:pointer}
   <div class="maphead"><b>🗺️ המסע לאנגלית</b><span id="hiName"></span></div>
   <button class="coachcard" id="coachCard"></button>
   <div class="chgrid" id="chgrid"></div>
+  <div class="ver" id="ver"></div>
 </section>
 
 <!-- COACH -->
@@ -736,25 +740,33 @@ const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'
 let voice=null;
 function pickVoice(){try{const vs=speechSynthesis.getVoices();voice=vs.find(v=>/en[-_]US/i.test(v.lang))||vs.find(v=>/^en/i.test(v.lang))||null}catch(e){}}
 try{pickVoice();speechSynthesis.onvoiceschanged=pickVoice}catch(e){}
+const APP_VER='4.4';
 let onlineAudio=null;
-const IN_WEBVIEW=/; wv\)|\bwv\b/.test(navigator.userAgent)||!('speechSynthesis' in window)||!window.SpeechSynthesisUtterance;
+function sToast(msg){let t=document.getElementById('toast');if(!t){t=document.createElement('div');t.id='toast';document.body.appendChild(t)}t.innerHTML=msg;t.classList.add('on');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('on'),5000)}
 function playOnline(txt){
-  try{
-    if(onlineAudio){onlineAudio.pause()}
-    onlineAudio=new Audio('https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=en&ttsspeed=0.8&q='+encodeURIComponent(txt));
-    return onlineAudio.play();
-  }catch(e){return Promise.reject(e)}
+  return new Promise((res,rej)=>{
+    try{
+      if(onlineAudio){try{onlineAudio.pause()}catch(e){}}
+      const a=new Audio();onlineAudio=a;
+      let done=false;const fail=e=>{if(!done){done=true;rej(e||new Error('audio'))}};
+      a.onerror=()=>fail(new Error('load'));
+      a.onplaying=()=>{if(!done){done=true;res()}};
+      setTimeout(()=>fail(new Error('timeout')),6000);
+      a.src='https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=en&ttsspeed=0.8&q='+encodeURIComponent(txt);
+      const p=a.play();if(p&&p.catch)p.catch(fail);
+    }catch(e){rej(e)}
+  });
 }
 function speakLocal(txt){
-  try{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(txt);u.lang='en-US';u.rate=.8;if(voice)u.voice=voice;
-    u.onerror=()=>{playOnline(txt).catch(()=>{})};speechSynthesis.speak(u);return true}catch(e){return false}
+  if(!('speechSynthesis' in window)||!window.SpeechSynthesisUtterance)return false;
+  try{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(txt);u.lang='en-US';u.rate=.8;if(voice)u.voice=voice;speechSynthesis.speak(u);return true}catch(e){return false}
 }
 function speak(t){
   const txt=t.replace(/\.\.\./g,' ');
-  if(IN_WEBVIEW){                       // APK / in-app viewers: no built-in speech -> online voice
-    playOnline(txt).catch(()=>{speakLocal(txt)});return;
-  }
-  if(!speakLocal(txt))playOnline(txt).catch(()=>{});
+  if(navigator.onLine===false){if(!speakLocal(txt))sToast('🔇 אין אינטרנט – לא ניתן להשמיע את המילה');return}
+  playOnline(txt).catch(e=>{
+    if(!speakLocal(txt))sToast('🔇 לא הצלחתי להשמיע ('+((e&&(e.message||e.name))||'שגיאה')+').<br>בדוק שעוצמת <b>המדיה</b> בטלפון לא על אפס ושיש אינטרנט.');
+  });
 }
 let actx=null;
 function beep(good){try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();const o=actx.createOscillator(),g=actx.createGain();o.connect(g);g.connect(actx.destination);const t=actx.currentTime;
@@ -1128,6 +1140,7 @@ try{
 if('serviceWorker' in navigator&&(location.protocol==='https:'||location.hostname==='localhost')){window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}))}
 
 /* ================= boot ================= */
+try{$('ver').textContent='גרסה '+APP_VER}catch(e){}
 S=merge(S,loadLocal());
 registerVisit();
 $('nameGo').onclick=()=>{S.name=$('nameIn').value.trim().slice(0,20);save();openMap()};
